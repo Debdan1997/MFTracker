@@ -3,20 +3,14 @@ import pandas as pd
 import requests
 import streamlit as st
 
-# Set page config for mobile views
 st.set_page_config(page_title="MF Tracker", page_icon="📈", layout="centered")
-
 st.title("📈 Mutual Fund Tracker")
 
-# Default Watchlist (Scheme Code : Display Name)
 DEFAULT_FUNDS = {
-    "125354": "Axis Small Cap Fund - Direct Growth",
     "122639": "Parag Parikh Flexi Cap Fund - Direct Growth",
-    "119062": "HDFC Index S&P BSE Sensex - Direct Growth",
 }
 
-
-@st.cache_data(ttl=3600)  # Cache results for 1 hour to ensure quick reloads
+@st.cache_data(ttl=3600)
 def fetch_fund_data(code, name):
     try:
         url = f"https://api.mfapi.in/mf/{code}"
@@ -28,7 +22,6 @@ def fetch_fund_data(code, name):
         if not data or len(data) < 2:
             return None
 
-        # Process NAV data into pandas DataFrame
         df = pd.DataFrame(data)
         df["date"] = pd.to_datetime(df["date"], format="%d-%m-%Y")
         df["nav"] = df["nav"].astype(float)
@@ -37,32 +30,39 @@ def fetch_fund_data(code, name):
         latest_nav = df.iloc[0]["nav"]
         latest_date = df.iloc[0]["date"].strftime("%d %b %Y")
 
+        # Helper function to compute percentage change against a target past date
+        def get_pct_change_for_days(days):
+            target_date = df.iloc[0]["date"] - timedelta(days=days)
+            past_df = df[df["date"] <= target_date]
+            if not past_df.empty:
+                past_nav = past_df.iloc[0]["nav"]
+                return round(((latest_nav - past_nav) / past_nav) * 100, 2)
+            return 0.0
+
         # 1-Day Return
         prev_nav = df.iloc[1]["nav"]
-        daily_change = ((latest_nav - prev_nav) / prev_nav) * 100
+        daily_change = round(((latest_nav - prev_nav) / prev_nav) * 100, 2)
 
-        # 30-Day Return (~30 calendar days ago)
-        target_date = df.iloc[0]["date"] - timedelta(days=30)
-        past_df = df[df["date"] <= target_date]
-        if not past_df.empty:
-            monthly_nav = past_df.iloc[0]["nav"]
-            monthly_change = ((latest_nav - monthly_nav) / monthly_nav) * 100
-        else:
-            monthly_change = 0.0
+        # 1-Month (30 Days) Return
+        monthly_change = get_pct_change_for_days(30)
+
+        # 3-Month (90 Days) Return
+        three_month_change = get_pct_change_for_days(90)
 
         return {
             "name": name,
             "code": code,
             "latest_date": latest_date,
             "latest_nav": round(latest_nav, 2),
-            "daily_pct": round(daily_change, 2),
-            "monthly_pct": round(monthly_change, 2),
+            "daily_pct": daily_change,
+            "monthly_pct": monthly_change,
+            "three_month_pct": three_month_change,
         }
     except Exception:
         return None
 
 
-# Sidebar for managing watchlist
+# Sidebar Watchlist
 st.sidebar.header("Manage Watchlist")
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = DEFAULT_FUNDS.copy()
@@ -75,7 +75,7 @@ if st.sidebar.button("Add Mutual Fund"):
         st.sidebar.success(f"Added {new_name}")
         st.rerun()
 
-# Main Display Loop
+# Display Metrics
 funds_data = []
 with st.spinner("Fetching latest NAVs..."):
     for code, name in st.session_state.watchlist.items():
@@ -83,7 +83,6 @@ with st.spinner("Fetching latest NAVs..."):
         if info:
             funds_data.append(info)
 
-# Render Mobile-Friendly Metric Cards
 if funds_data:
     for item in funds_data:
         st.subheader(item["name"])
@@ -91,11 +90,17 @@ if funds_data:
             f"NAV: ₹{item['latest_nav']} | Updated: {item['latest_date']}"
         )
 
-        col1, col2 = st.columns(2)
-        col1.metric("Daily Change", f"{item['daily_pct']}%", delta=item["daily_pct"])
+        # Render 3 Columns for 1D, 1M, and 3M
+        col1, col2, col3 = st.columns(3)
+        col1.metric("1-Day", f"{item['daily_pct']}%", delta=item["daily_pct"])
         col2.metric(
-            "30-Day Change", f"{item['monthly_pct']}%", delta=item["monthly_pct"]
+            "1-Month", f"{item['monthly_pct']}%", delta=item["monthly_pct"]
+        )
+        col3.metric(
+            "3-Month",
+            f"{item['three_month_pct']}%",
+            delta=item["three_month_pct"],
         )
         st.divider()
 else:
-    st.warning("No data retrieved. Please check scheme codes or connection.")
+    st.warning("No data retrieved.")
